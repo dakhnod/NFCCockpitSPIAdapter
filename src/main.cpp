@@ -296,6 +296,19 @@ void setup() {
   #endif
 }
 
+void error(){
+  for(;;) {
+    #ifdef WS2812_PIN
+    leds[0] = CRGB::Red;
+    FastLED.show();
+    delay(100);
+    leds[0] = CRGB::Black;
+    FastLED.show();
+    delay(100);
+    #endif
+  }
+}
+
 void loop() {
   if(!SERIAL_PORT.available()){
     return;
@@ -317,21 +330,21 @@ void loop() {
 
   if(payloadLength != SERIAL_PORT.available()) {
     // error with payload length
-    for(;;){};
+    error();
   }
 
   auto handler = commandMap.find(std::forward<uint8_t>(lastClass));
 
   if(handler == commandMap.end()) {
     // error finding class
-    for(;;){};
+    error();
   }
 
   auto insHandler = handler->second.find(std::forward<uint8_t>(lastInstruction));
 
   if(insHandler == handler->second.end()) {
     // error finding instruction
-    for(;;){};
+    error();
   }
 
   insHandler->second(parameter1, parameter2, payloadLength);

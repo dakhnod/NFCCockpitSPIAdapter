@@ -2,7 +2,11 @@
 #include <SPI.h>
 #include <map>
 
-#define SERIAL_PORT Serial1
+#ifdef WS2812_PIN
+#include <FastLED.h>
+
+CRGB leds[1];
+#endif
 
 bool uartBufferAvailable = false;
 
@@ -110,6 +114,8 @@ void awaitBusyState(int state) {
 void transmitSPI(uint8_t *data, int length, uint8_t *response, int response_length) {
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
   if(length > 0) {
+    FastLED.showColor(CRGB::Red);
+
     awaitBusyState(LOW);
 
     digitalWrite(PIN_SS, LOW);
@@ -128,9 +134,12 @@ void transmitSPI(uint8_t *data, int length, uint8_t *response, int response_leng
   }
 
   if(response_length == 0) {
+    FastLED.showColor(CRGB::Black);
     SPI.endTransaction();
     return;
   }
+
+  FastLED.showColor(CRGB::Green);
 
   memset(response, 0xFF, response_length);
 
@@ -149,6 +158,8 @@ void transmitSPI(uint8_t *data, int length, uint8_t *response, int response_leng
 
   SPI.endTransaction();
   digitalWrite(PIN_SS, HIGH);
+  
+  FastLED.showColor(CRGB::Black);
 }
 
 void transmit(uint8_t, uint8_t, uint16_t length) {
@@ -277,6 +288,11 @@ void setup() {
   SERIAL_PORT.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);
   #else
   SERIAL_PORT.begin(115200);
+  #endif
+
+  #ifdef WS2812_PIN
+  FastLED.addLeds<WS2812, WS2812_PIN, GRB>(leds, 1);
+  FastLED.showColor(CRGB::Black);
   #endif
 }
 

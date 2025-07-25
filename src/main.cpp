@@ -262,10 +262,22 @@ void setup() {
 
   memset(stub, 0xFF, sizeof(stub));
 
-  // SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI);
+  #ifdef PIN_MOSI
+  SPI.setMOSI(PIN_MOSI);
+  #endif
+  #ifdef PIN_MISO
+  SPI.setMISO(PIN_MISO);
+  #endif
+  #ifdef PIN_SCK
+  SPI.setSCK(PIN_SCK);
+  #endif
   SPI.begin();
 
-  SERIAL_PORT.begin(115200, SERIAL_8N1, 34, 33);
+  #ifdef PIN_RX
+  SERIAL_PORT.begin(115200, SERIAL_8N1, PIN_RX, PIN_TX);
+  #else
+  SERIAL_PORT.begin(115200);
+  #endif
 }
 
 void loop() {

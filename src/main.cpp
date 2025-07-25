@@ -2,10 +2,11 @@
 #include <SPI.h>
 #include <map>
 
+#define SERIAL_PORT Serial1
+
 bool uartBufferAvailable = false;
 
-typedef std::function<void (uint8_t, uint8_t, uint16_t)> instructionHandler;
-typedef std::map<uint8_t, instructionHandler> classHandler;
+typedef std::map<uint8_t, void (*)(uint8_t, uint8_t, uint16_t)> classHandler;
 
 uint8_t lastClass, lastInstruction;
 
@@ -20,19 +21,22 @@ std::map<uint8_t, int> pinMapping {
 
 void readSerialBuffer(uint8_t *buffer, int length) {
   for(int i = 0; i < length; i++) {
-    buffer[i] = (uint8_t) Serial.read();
+    buffer[i] = (uint8_t) SERIAL_PORT.read();
   }
 }
 
 void sendResponse(uint8_t apiCode, uint8_t componentCode, uint8_t *data=NULL, uint16_t length=0) {
-  Serial.write(lastClass);
-  Serial.write(lastInstruction);
-  Serial.write(apiCode);
-  Serial.write(componentCode);
+  uint8_t result[length + 6];
 
-  Serial.write((uint8_t*)(&length), 2);
+  result[0] = lastClass;
+  result[1] = lastInstruction;
+  result[2] = apiCode;
+  result[3] = componentCode;
+  memcpy(result + 4, (uint8_t*)(&length), 2);
+  memcpy(result + 6, data, length);
 
-  Serial.write(data, length);
+  SERIAL_PORT.write(result, length + 6);
+  // SERIAL_PORT.flush();
 };
 
 void sendResponseByte(uint8_t apiCode, uint8_t componentCode, uint8_t data) {
@@ -49,7 +53,7 @@ void echoDescending(uint8_t parameter1, uint8_t parameter2, uint16_t length) {
 
 void echoLengthAscending(uint8_t parameter1, uint8_t parameter2, uint16_t length) {
   uint8_t response[4]  = {
-    (uint8_t) Serial.read(),
+    (uint8_t) SERIAL_PORT.read(),
     0x00,
   };
   memcpy(response + 2, &length, 2);
@@ -86,17 +90,17 @@ void waitForLow(uint8_t index, uint8_t, uint16_t) {
 
 void readLibraryString(uint8_t, uint8_t, uint16_t) {
   char firmware[] = "0.1 by Daniel Dakhno";
-  sendResponse(0, 0, (uint8_t*) firmware, strlen(firmware));
+  sendResponse(0, 0, (uint8_t*) firmware, sizeof(firmware));
 }
 
 void readFirmwareString (uint8_t, uint8_t, uint16_t) {
   char firmware[] = "0.1 by Daniel Dakhno";
-  sendResponse(0, 0, (uint8_t*) firmware, strlen(firmware));
+  sendResponse(0, 0, (uint8_t*) firmware, sizeof(firmware));
 }
 
 void readFirmwareDate(uint8_t, uint8_t, uint16_t) {
   char firmware[] = __DATE__;
-  sendResponse(0, 0, (uint8_t*) firmware, strlen(firmware));
+  sendResponse(0, 0, (uint8_t*) firmware, sizeof(firmware));
 }
 
 void awaitBusyState(int state) {
@@ -104,7 +108,7 @@ void awaitBusyState(int state) {
 }
 
 void transmitSPI(uint8_t *data, int length, uint8_t *response, int response_length) {
-  SPI.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
   if(length > 0) {
     awaitBusyState(LOW);
 
@@ -116,7 +120,7 @@ void transmitSPI(uint8_t *data, int length, uint8_t *response, int response_leng
       SPI.transfer(data[i]);
     }
 
-    awaitBusyState(HIGH);
+    // awaitBusyState(HIGH);
 
     digitalWrite(PIN_SS, HIGH);
 
@@ -134,10 +138,10 @@ void transmitSPI(uint8_t *data, int length, uint8_t *response, int response_leng
 
   // SPI.transferBytes(stub, response, response_length);
   for(int i = 0; i < response_length; i++) {
-    response[i] = SPI.transfer(stub[i]);
+    response[i] = SPI.transfer(0xFF);
   }
 
-  awaitBusyState(HIGH);
+  // awaitBusyState(HIGH);
 
   digitalWrite(PIN_SS, HIGH);
 
@@ -157,17 +161,18 @@ void transmit(uint8_t, uint8_t, uint16_t length) {
   sendResponse(0, 0);
 }
 
-void transceive(uint8_t, uint8_t, uint16_t length) {
+void transceive(uint8_t arg1, uint8_t arg2, uint16_t length) {
   uint8_t buffer[length];
   if(length > 0) {
     readSerialBuffer(buffer, length);
   }
+  
+  uint16_t responseLength = arg1 | (arg2 << 8);
+  uint8_t response[responseLength];
+  
+  transmitSPI(buffer, length, response, responseLength);
 
-  uint8_t response[sizeof(stub)];
-
-  transmitSPI(buffer, length, response, sizeof(response));
-
-  sendResponse(0, 0, response, sizeof(response));
+  sendResponse(0, 0, response, responseLength);
 }
 
 void receive(uint8_t arg1, uint8_t arg2, uint16_t length) {
@@ -210,6 +215,7 @@ std::map<uint8_t, classHandler> commandMap {
       {0x15, readFirmwareDate},
 
       {0x20, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 1); }}, // reader type
+      {0x30, [](uint8_t, uint8_t, uint16_t){ char board[] = "ESP32"; sendResponse(0, 0, (uint8_t*) board, sizeof(board)); }},
     }
   },
   {
@@ -218,7 +224,25 @@ std::map<uint8_t, classHandler> commandMap {
       {0x0D, echoDescending},
       {0x1A, echoLengthAscending},
       {0xE0, echoIdentity},
-  }}
+  }},
+  {    
+    0x5e, { // Task management
+      {0x0a, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 0); }}, // stop task
+      {0xc0, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 0); }}, // get task count
+      {0xca, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 1); }}, // isUpdatetable
+   }
+  },
+  {
+    0xc0, { // Configuration
+      {0xeb, [](uint8_t, uint8_t, uint16_t){ uint8_t response[] = {0x01, 0x00}; sendResponse(0x00, 0x00, response, 2); }}, // Config_INS_GetBALType
+      {0xbe, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 0); }}, // Config_INS_WaitBeforeRX_Strategy
+      {0xb5, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 0); }}, // Config_INS_WaitBeforeTX_Strategy
+      {0xe5, [](uint8_t, uint8_t, uint16_t){ sendResponse(0x21, 0xF1, NULL, 0); }}, // Config_INS_GetSupportedFrameSize
+      {0xef, [](uint8_t, uint8_t, uint16_t){ uint8_t response[] = {0x01, 0x08}; sendResponse(0x00, 0x00, response, 2); }}, // Config_INS_GetFrameSize
+      {0x14, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 0); }}, // Config_INS_ConfigIRQPollStrategy
+      {0x15, [](uint8_t, uint8_t, uint16_t){ sendResponseByte(0, 0, 0); }}, // Config_INS_WaitIRQDelayWithTestBus
+    }
+  }
 };
 
 void uartOnReceive(){
@@ -232,48 +256,54 @@ void setup() {
   pinMode(PIN_RESET, OUTPUT);
   pinMode(PIN_SS, OUTPUT);
 
+  digitalWrite(PIN_RESET, 0);
+  delay(100);
+  digitalWrite(PIN_RESET, 1);
+
   memset(stub, 0xFF, sizeof(stub));
 
   // SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI);
   SPI.begin();
 
-  Serial.begin(115200);
-
-  // Serial.onReceive(uartOnReceive, true);
+  SERIAL_PORT.begin(115200, SERIAL_8N1, 34, 33);
 }
 
 void loop() {
-  while(!Serial.available());
+  if(!SERIAL_PORT.available()){
+    return;
+  }
 
   delay(1);
 
-  lastClass = Serial.read();
-  lastInstruction = Serial.read();
+  lastClass = SERIAL_PORT.read();
+  lastInstruction = SERIAL_PORT.read();
 
-  uint8_t parameter1 = Serial.read();
-  uint8_t parameter2 = Serial.read();
+  uint8_t parameter1 = SERIAL_PORT.read();
+  uint8_t parameter2 = SERIAL_PORT.read();
 
   uint16_t payloadLength = 0;
 
 
-  // Serial.read((uint8_t*)(&payloadLength), 2);
-  payloadLength |= Serial.read();
-  payloadLength |= Serial.read() << 8;
+  payloadLength |= SERIAL_PORT.read();
+  payloadLength |= SERIAL_PORT.read() << 8;
 
-  if(payloadLength != Serial.available()) {
+  if(payloadLength != SERIAL_PORT.available()) {
     // error with payload length
+    for(;;){};
   }
 
   auto handler = commandMap.find(std::forward<uint8_t>(lastClass));
 
   if(handler == commandMap.end()) {
     // error finding class
+    for(;;){};
   }
 
   auto insHandler = handler->second.find(std::forward<uint8_t>(lastInstruction));
 
   if(insHandler == handler->second.end()) {
     // error finding instruction
+    for(;;){};
   }
 
   insHandler->second(parameter1, parameter2, payloadLength);
